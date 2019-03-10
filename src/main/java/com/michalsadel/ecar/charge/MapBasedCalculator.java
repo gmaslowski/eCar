@@ -7,6 +7,8 @@ import java.math.*;
 import java.time.*;
 import java.time.temporal.*;
 import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
 
 import static java.util.Objects.*;
 
@@ -26,11 +28,11 @@ class MapBasedCalculator implements ChargeCalculator {
     }
 
     private List<BigDecimal> createPriceMap(List<PriceDto> priceList) {
-        final List<BigDecimal> mapping = new ArrayList<>();
         priceList.sort(Comparator.comparing(this::minuteFromStart));
-        for (int i = 0; i < Duration.between(LocalTime.MIDNIGHT, LocalTime.MAX).toMinutes(); i++) {
-            mapping.add(BigDecimal.ZERO);
-        }
+        final List<BigDecimal> mapping = LongStream.range(0, Duration.between(LocalTime.MIDNIGHT, LocalTime.MAX).toMinutes())
+                .boxed()
+                .map(aLong -> BigDecimal.ZERO)
+                .collect(Collectors.toList());
         for (PriceDto price : priceList) {
             for (int i = minuteFromStart(price); i < minuteFromEnd(price); i++) {
                 mapping.set(i, price.getPerMinute());
@@ -41,13 +43,11 @@ class MapBasedCalculator implements ChargeCalculator {
 
     @Override
     public BigDecimal calculate(LocalDateTime startsAt, LocalDateTime finishesAt, List<PriceDto> prices) {
-        final List<BigDecimal> priceMap = createPriceMap(prices);
-        Duration duration = Duration.between(startsAt, finishesAt);
-        BigDecimal sum = BigDecimal.ZERO;
-        for (int i = 0; i < duration.toMinutes(); i++) {
-            sum = sum.add(priceMap.get((startsAt.get(ChronoField.MINUTE_OF_DAY) + i) % (int) ChronoField.MINUTE_OF_DAY.range().getMaximum()));
-        }
         log.info("Calculated using {}", getClass().getSimpleName());
-        return sum;
+        final List<BigDecimal> priceMap = createPriceMap(prices);
+        LongFunction<BigDecimal> mapper = minute -> priceMap.get((startsAt.get(ChronoField.MINUTE_OF_DAY) + (int) minute) % (int) ChronoField.MINUTE_OF_DAY.range().getMaximum());
+        return LongStream.range(0, Duration.between(startsAt, finishesAt).toMinutes())
+                .mapToObj(mapper)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 }
