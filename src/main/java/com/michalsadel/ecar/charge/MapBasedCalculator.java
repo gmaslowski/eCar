@@ -31,7 +31,7 @@ class MapBasedCalculator implements ChargeCalculator {
         priceList.sort(Comparator.comparing(this::minuteFromStart));
         final List<BigDecimal> mapping = LongStream.range(0, Duration.between(LocalTime.MIDNIGHT, LocalTime.MAX).toMinutes())
                 .boxed()
-                .map(aLong -> BigDecimal.ZERO)
+                .map(l -> BigDecimal.ZERO)
                 .collect(Collectors.toList());
         for (PriceDto price : priceList) {
             for (int i = minuteFromStart(price); i < minuteFromEnd(price); i++) {
