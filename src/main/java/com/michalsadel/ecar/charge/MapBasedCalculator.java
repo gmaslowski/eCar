@@ -10,44 +10,58 @@ import java.util.*;
 import java.util.function.*;
 import java.util.stream.*;
 
+import static java.math.BigDecimal.*;
 import static java.util.Objects.*;
 
 class MapBasedCalculator implements ChargeCalculator {
     private static final Logger log = LoggerFactory.getLogger(MapBasedCalculator.class);
+    private static final int HOURS_PER_DAY = 24;
+    private static final int MINUTES_PER_HOUR = 60;
+    private static final int MINUTES_PER_DAY = MINUTES_PER_HOUR * HOURS_PER_DAY;
 
-    private int minuteFromStart(PriceDto priceDto) {
-        requireNonNull(priceDto);
-        requireNonNull(priceDto.getEffectedIn());
-        return priceDto.getEffectedIn().getStartsAt().get(ChronoField.MINUTE_OF_DAY);
+    private final Map<Integer, BigDecimal> defaultPriceMapOfDay;
+
+    public MapBasedCalculator() {
+        defaultPriceMapOfDay = Collections.unmodifiableMap(
+                IntStream.range(0, MINUTES_PER_DAY)
+                        .boxed()
+                        .collect(Collectors.toMap(Function.identity(), value -> ZERO)));
     }
 
-    private int minuteFromEnd(PriceDto priceDto) {
-        requireNonNull(priceDto);
-        requireNonNull(priceDto.getEffectedIn());
-        return priceDto.getEffectedIn().getFinishesAt().get(ChronoField.MINUTE_OF_DAY);
+    private int getMinuteOfDay(LocalTime time) {
+        requireNonNull(time);
+        return time.get(ChronoField.MINUTE_OF_DAY);
     }
 
-    private List<BigDecimal> createPriceMap(List<PriceDto> priceList) {
-        priceList.sort(Comparator.comparing(this::minuteFromStart));
-        final List<BigDecimal> mapping = LongStream.range(0, Duration.between(LocalTime.MIDNIGHT, LocalTime.MAX).toMinutes())
-                .boxed()
-                .map(l -> BigDecimal.ZERO)
-                .collect(Collectors.toList());
-        for (PriceDto price : priceList) {
-            for (int i = minuteFromStart(price); i < minuteFromEnd(price); i++) {
-                mapping.set(i, price.getPerMinute());
-            }
-        }
-        return Collections.unmodifiableList(mapping);
+    private int getMinuteOfDay(LocalDateTime time) {
+        requireNonNull(time);
+        return time.get(ChronoField.MINUTE_OF_DAY);
+    }
+
+    private Map<Integer, BigDecimal> createPriceMap(List<PriceDto> prices) {
+        final Map<Integer, BigDecimal> priceMapOfADay = prices.stream()
+                .sorted(Comparator.comparing(PriceDto::getDefaultInSystem).reversed())
+                .map(price -> IntStream
+                        .range(
+                                getMinuteOfDay(price.getEffectedIn().getStartsAt()),
+                                getMinuteOfDay(price.getEffectedIn().getFinishesAt()))
+                        .mapToObj(minute -> new AbstractMap.SimpleImmutableEntry<>(minute, price.getPerMinute()))
+                )
+                .flatMap(Function.identity())
+                .collect(Collectors.toMap(AbstractMap.SimpleImmutableEntry::getKey, AbstractMap.SimpleImmutableEntry::getValue, (price1, price2) -> price2));
+
+        return Stream.concat(defaultPriceMapOfDay.entrySet().stream(), priceMapOfADay.entrySet().stream())
+                .sorted(Map.Entry.comparingByKey())
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (price1, price2) -> price2));
+
     }
 
     @Override
     public BigDecimal calculate(LocalDateTime startsAt, LocalDateTime finishesAt, List<PriceDto> prices) {
         log.info("Calculated using {}", getClass().getSimpleName());
-        final List<BigDecimal> priceMap = createPriceMap(prices);
-        LongFunction<BigDecimal> mapper = minute -> priceMap.get((startsAt.get(ChronoField.MINUTE_OF_DAY) + (int) minute) % (int) ChronoField.MINUTE_OF_DAY.range().getMaximum());
+        final Map<Integer, BigDecimal> priceMap = createPriceMap(prices);
         return LongStream.range(0, Duration.between(startsAt, finishesAt).toMinutes())
-                .mapToObj(mapper)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                .mapToObj(minute -> priceMap.get((getMinuteOfDay(startsAt) + (int) minute) % (MINUTES_PER_DAY - 1)))
+                .reduce(ZERO, BigDecimal::add);
     }
 }
